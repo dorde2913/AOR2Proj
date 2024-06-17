@@ -371,13 +371,16 @@ void* vm_main(void* args){
     bool closing_file = false;
     bool writing = false;
     bool reading = false;
+    int read_size = 0;
 
     bool getting_name = false;
     bool getting_mode = false;
+    bool getting_size = false;
 
 
     char mode[3];
-    char name[255] ;
+    char name[255];
+    char size[255];
     int index =0;
     FILE* current_file;
     OpenFiles *file_list = NULL;
@@ -409,6 +412,25 @@ void* vm_main(void* args){
                     /*
                      * citanje iz fajla
                      */
+                    if (reading){
+                        if (feof(current_file)){
+                            reading = false;
+                            char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
+                            (*data_in) = '\0';
+                        }
+                        //printf("reading character from file...\n");
+                        char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
+                        (*data_in) = fgetc(current_file);
+
+                        if (ferror(current_file))printf("error...\n");
+                        //printf("%c\n",*data_in);
+                        read_size--;
+                        if (read_size == 0) reading = false;
+                    }
+                    else{
+                        char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
+                        (*data_in) = '\0';
+                    }
                 }
                 else if (vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.port == 0x278) {
                     /*
@@ -522,8 +544,28 @@ void* vm_main(void* args){
                                 name[index] = input;
                                 index++;
                                 if (input == '\0'){
+                                    printf("reading from %s ... \n",name);
                                     getting_name = false;
+                                    getting_size = true;
                                     index = 0;
+                                    OpenFiles *temp = file_list;
+                                    while(temp && strcmp(temp->name,name)!=0)temp=temp->next;
+                                    if (!temp){
+                                        printf("ERROR");
+                                        return false;
+                                    }
+                                    current_file = temp->file;
+                                }
+                            }
+                            else if (reading && getting_size){
+                                size[index] = input;
+                                index++;
+                                if (input == '\0'){
+                                    printf("reading %s characters from %s ... \n",size,name);
+                                    getting_size = false;
+                                    index = 0;
+                                    read_size = atoi(size);
+                                    fseek(current_file,0,0);
                                 }
                             }
                             else if (writing && getting_name){

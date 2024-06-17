@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdbool.h>
 
 static void outb(uint16_t port, uint8_t value) {
     asm("outb %0,%1" : /* empty */ : "a" (value), "Nd" (port) : "memory");
@@ -55,7 +56,34 @@ static void f_close(char* file_name){
     }
     outb(port,'\0');
 }
+static char* f_read(char* buffer,char* file_name,char* size){
 
+
+    int port = 0x278;
+    outb(port,0x03);//signal za read
+    for (char* p = file_name;*p!='\0';p++){
+        outb(port,*p);
+    }
+    outb(port,'\0');
+
+
+
+    for (char* p = size;*p!='\0';p++){
+        outb(port,*p);
+    }
+    outb(port,'\0');
+
+
+    int i=0;
+    while(true){
+        inb(port,&buffer[i]);
+        if (buffer[i] == '\0') break;
+        i++;
+    }
+
+
+
+}
 
 void
 __attribute__((noreturn))
@@ -71,10 +99,17 @@ _start(void) {
     uint8_t value = 'E';
     uint8_t input;
     char* file_name = "test.txt";
-    f_open(file_name,"w");
+    f_open(file_name,"r+");
+    char buffer[255];
 
     f_write(file_name,"Ovo je test upisa u fajl\n");
-    f_write(file_name,"Ovo je druga linija testa\n");
+
+    char* temp = buffer;
+    f_read(temp,file_name,"100");
+
+    for (char* p = temp;*p!='\0';p++){
+        outb(0xE9,*p);
+    }
 
     f_close(file_name);
     /*
