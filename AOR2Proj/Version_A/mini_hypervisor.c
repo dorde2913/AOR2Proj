@@ -117,7 +117,7 @@ static void setup_64bit_code_segment(struct kvm_sregs *sregs)
 // Vise od long modu mozete prociati o stranicenju u glavi 5:
 // https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf
 // Pogledati figuru 5.1 na stranici 128.
-static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs)
+static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs,int PAGE_SIZE)
 {
     // Postavljanje 4 niva ugnjezdavanja.
     // Svaka tabela stranica ima 512 ulaza, a svaki ulaz je veličine 8B.
@@ -135,18 +135,36 @@ static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs)
     uint64_t pt_addr = 0x4000;
     uint64_t *pt = (void *)(vm->mem + pt_addr);
 
+
     pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
     pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
+
+    switch(PAGE_SIZE){
+        case 0x200000:
+            pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
+            // PC vrednost se mapira na ovu stranicu.
+            pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+            // SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
+            pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+            break;
+        case 0x1000:
+            pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
+            // PC vrednost se mapira na ovu stranicu.
+            pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+            // SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
+            pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+            break;
+    }
     // 2MB page size
     // pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
 
     // 4KB page size
     // -----------------------------------------------------
-    pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
+    //pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
     // PC vrednost se mapira na ovu stranicu.
-    pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+    //pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
     // SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
-    pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+    //pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
 
     // FOR petlja služi tome da mapiramo celu memoriju sa stranicama 4KB.
     // Zašti je uslov i < 512? Odgovor: jer je memorija veličine 2MB.
@@ -169,7 +187,8 @@ void printUsage() {
     printf("Usage: program_name [options]\n");
     printf("Options:\n");
     printf("  -m, --memory <2|4|8>   Set memory size (in GB)\n");
-    printf("  -p, --page <2|4>       Set page size (in KB)\n");
+    printf("  -p, --page <2|4>       \n");
+    printf("  -p, --page <2|4>       \n");
     printf("  -g, --guest <file.img> Specify guest image file\n");
 }
 bool check_arguments(int argc, char* argv[],char** img, int* mem_size, int* page_size){
@@ -216,7 +235,7 @@ bool check_arguments(int argc, char* argv[],char** img, int* mem_size, int* page
         return false;
     }
     if (*page_size != 2 && *page_size != 4) {
-        printf("Error: Invalid page size. Choose 2 or 4 KB.\n");
+        printf("Error: Invalid page size. Choose 2 or 4 .\n");
         return false;
     }
     if (img == NULL) {
@@ -242,7 +261,9 @@ int main(int argc, char *argv[])
     int mem_size;// 2,4,8 MB
     int page_size;//2KB ili 2MB
     int MEM_SIZE;
+    int PAGE_SIZE;
     char* file_name;
+    int data;
 
     if (!check_arguments(argc, argv,&file_name,&mem_size,&page_size)) return -1;
     switch(mem_size){
@@ -258,6 +279,15 @@ int main(int argc, char *argv[])
         default:
             break;
     }
+    switch(page_size){
+        case 2:
+            PAGE_SIZE = 0x200000;
+            break;
+        case 4:
+            PAGE_SIZE = 0x1000;
+            break;
+    }
+
     //ovo je lagano moglo u check funkciju ali me mrzi da pomerim :)
 
     if (init_vm(&vm, MEM_SIZE)) {
@@ -270,7 +300,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    setup_long_mode(&vm, &sregs);
+    setup_long_mode(&vm, &sregs,PAGE_SIZE);
 
     if (ioctl(vm.vcpu_fd, KVM_SET_SREGS, &sregs) < 0) {
         perror("KVM_SET_SREGS");
@@ -315,6 +345,14 @@ int main(int argc, char *argv[])
                 if (vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.port == 0xE9) {
                     char *p = (char *)vm.kvm_run;
                     printf("%c", *(p + vm.kvm_run->io.data_offset));
+                }
+                else if (vm.kvm_run->io.direction == KVM_EXIT_IO_IN && vm.kvm_run->io.port == 0xE9) {
+
+                    printf("Enter a number between 0 and 8:\n");
+                    scanf("%d", &data);
+                    char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
+
+                    (*data_in) = data;
                 }
                 continue;
             case KVM_EXIT_HLT:
