@@ -193,7 +193,7 @@ void printUsage() {
     printf("  -g, --guest <file.img> Specify guest image file\n");
 }
 
-bool check_arguments(int argc, char* argv[],char*** img, int* mem_size, int* page_size,int* num_guests){
+bool check_arguments(int argc, char* argv[],char*** img, int* mem_size, int* page_size,int* num_guests,char*** shared_files, int* num_shared){
 
     for (int i = 1; i < argc; i++) {
 
@@ -216,15 +216,12 @@ bool check_arguments(int argc, char* argv[],char*** img, int* mem_size, int* pag
                 return false;
             }
         } else if (strcmp(argv[i], "--guest") == 0 || strcmp(argv[i], "-g") == 0) {
-
             int c =0;
-
-
             if (argc - (i+1) == 0){
-                printUsage();
+                printf("bad args\n");
                 return false;
             }
-            *num_guests = argc - (i+1);
+            //*num_guests = argc - (i+1);
             if (img!=NULL){
                 *img = (char**)malloc(((argc-(i+1))*sizeof(char*)));
                 if (*img == NULL) {
@@ -233,17 +230,15 @@ bool check_arguments(int argc, char* argv[],char*** img, int* mem_size, int* pag
                 }
             }
             else return false;
-            while (i + 1 < argc) {
-
-                (*img)[c] = (char*) malloc(100*sizeof(char));
+            while (i + 1 < argc && strcmp("--file",argv[i+1])!=0 && strcmp("-f",argv[i+1])!=0) {
+                (*img)[c] = (char*) malloc(255*sizeof(char));
                 if ((*img)[c]!=NULL){
                     strcpy((*img)[c],argv[i+1]);
                 }
-
                 c++;
-                //printf("%s\n",*img);
-                i++; // Skip the next argument
+                i++;
             }
+            *num_guests = c;
             if (i+1<argc && c == 0){
                 printf("Error: Missing guest image file argument.\n");
                 printUsage();
@@ -251,7 +246,33 @@ bool check_arguments(int argc, char* argv[],char*** img, int* mem_size, int* pag
             }
 
 
-        } else {
+        }
+        else if(strcmp(argv[i], "--file") == 0 || strcmp(argv[i], "-f") == 0){
+            int f = 0;
+            if (shared_files != NULL){
+                *shared_files = (char**)malloc(((argc-(i+1))*sizeof(char*)));
+                if (*shared_files == NULL) {
+                    printf("BAD ALLOC");
+                    return false;
+                }
+            }
+            else return false;
+            while (i + 1 < argc) {
+                (*shared_files)[f] = (char*) malloc(255*sizeof(char));
+                if ((*shared_files)[f]!=NULL){
+                    strcpy((*shared_files)[f],argv[i+1]);
+                }
+                f++;
+                i++;
+            }
+            *num_shared = f;
+            if (i+1<argc && f == 0){
+                printf("Error\n");
+                printUsage();
+                return false;
+            }
+        }
+        else {
             printf("Error: Unknown option '%s'.\n", argv[i]);
             printUsage();
             return false;
@@ -286,6 +307,8 @@ struct guest_args{
     int mem_size;
     int page_size;
     char* file_name;
+    char** shared_files;
+    int num_shared;
     int id;
 };
 sem_t mutex;
@@ -293,11 +316,36 @@ sem_t mutex;
 typedef struct OpenFiles{
     FILE* file;
     char name[255];
+    bool copied;
     struct OpenFiles* next;
 }OpenFiles;
 
 
+char* generateNewName(char* name,char id){
+    char* ret = malloc(255);
+    strcpy(ret,name);
+    printf("%c\n",id);
+    bool flag = false;
+    char carry;
+    char temp;
+    int i=0;
+    while(ret[i]!='.')i++;
+    int index = i;
+    temp = ret[i];
 
+    while(ret[i+1]!='\0'){
+        carry = ret[i+1];
+        ret[i+1] = temp;
+        temp = carry;
+        i++;
+    }
+    ret[i+1] = temp;
+    ret[i+2] = '\0';
+    ret[index] = id;
+    printf("%s\n",ret);
+    return ret;
+    //strcat(name,&carry);
+}
 void* vm_main(void* args){
     struct guest_args gargs = *((struct guest_args*)args);
     int id;
@@ -313,6 +361,8 @@ void* vm_main(void* args){
     char* file_name = gargs.file_name;
     int page_size = gargs.page_size;
     int MEM_SIZE = gargs.mem_size;
+    char** shared_files = gargs.shared_files;
+    int num_shared = gargs.num_shared;
     int PAGE_SIZE;
     switch(page_size){
         case 2:
@@ -502,15 +552,25 @@ void* vm_main(void* args){
                                             file_list->file = current_file;
                                             strcpy(file_list->name,name);
                                             file_list->next = NULL;
+                                            file_list->copied = false;
                                         }
                                         else{
                                             OpenFiles *temp = file_list;
                                             while(temp->next)temp=temp->next;
                                             temp->next = malloc(sizeof(OpenFiles));
+                                            temp = temp->next;
                                             temp->file = current_file;
                                             strcpy(temp->name,name);
                                             temp->next = NULL;
+                                            temp->copied = false;
                                         }
+                                        OpenFiles* temp = file_list;
+                                        printf("Open files: ");
+                                        while(temp){
+                                            printf("%s ",temp->name);
+                                            temp = temp->next;
+                                        }
+                                        printf("\n");
                                     }
                                 }
                             }
@@ -551,7 +611,7 @@ void* vm_main(void* args){
                                     OpenFiles *temp = file_list;
                                     while(temp && strcmp(temp->name,name)!=0)temp=temp->next;
                                     if (!temp){
-                                        printf("ERROR");
+                                        printf("ERROR, can't read from non-open file\n");
                                         return false;
                                     }
                                     current_file = temp->file;
@@ -587,10 +647,23 @@ void* vm_main(void* args){
                                     temp=temp->next;
                                 }
                                 if (!temp) {
-                                    printf("ERROR\n");
+                                    printf("ERROR, cant write to non-open file\n");
                                     return false;
                                 }
                                 //ako je fajl medju deljenim, mora da se napravi nov
+                                for (int i=0;i<num_shared;i++){
+                                    if (strcmp(temp->name,shared_files[i])==0 && !temp->copied){
+                                        //moramo da napravimo nov fajl
+                                        printf("pravimo novi fajl\n");
+                                        char t = (char)(id+48);
+                                        char* h = temp->name;
+                                        temp->copied = true;
+                                        char* new_name = generateNewName(h,t);
+                                        temp->file = fopen(new_name,"w+");
+                                        printf("%s\n",new_name);
+                                        break;
+                                    }
+                                }
                                 fwrite(&input,1,1,temp->file);
                             }
 
@@ -628,11 +701,24 @@ int main(int argc, char *argv[])
     int MEM_SIZE;
     char** file_names;
     int num_guests;
+    char** shared_files;
+    int num_shared;
 
 
 
+    if (!check_arguments(argc, argv,&file_names,&mem_size,&page_size, &num_guests,&shared_files,&num_shared)) return -1;
 
-    if (!check_arguments(argc, argv,&file_names,&mem_size,&page_size, &num_guests)) return -1;
+    /*
+    for (int i=0;i<num_guests;i++){
+        printf("%s\n",file_names[i]);
+    }
+
+
+    for (int i=0;i<num_shared;i++){
+        printf("%s\n",shared_files[i]);
+    }
+    */
+
     pthread_t* threads = malloc(num_guests*sizeof(pthread_t));
     switch(mem_size){
         case 2:
@@ -658,6 +744,8 @@ int main(int argc, char *argv[])
         args[i].file_name = file_names[i];
         args[i].page_size = page_size;
         args[i].mem_size = MEM_SIZE;
+        args[i].shared_files = shared_files;
+        args[i].num_shared = num_shared;
         pthread_create(&threads[i],NULL,vm_main,(void*) (&args[i]));
     }
 
