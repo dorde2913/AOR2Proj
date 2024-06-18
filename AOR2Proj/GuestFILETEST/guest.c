@@ -106,13 +106,6 @@ _start(void) {
 
     char* temp = buffer;
     f_read(temp,file_name,"100");
-    f_open("buh.txt","w");
-    f_open("buh2.txt","w");
-
-    f_write("buh.txt","Ovo je linija u fajlu buh \n");
-
-    f_close("buh.txt");
-    f_close("buh2.txt");
 
     for (char* p = temp;*p!='\0';p++){
         outb(0xE9,*p);

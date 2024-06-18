@@ -318,13 +318,14 @@ typedef struct OpenFiles{
     char name[255];
     bool copied;
     struct OpenFiles* next;
+    char mode[3];
 }OpenFiles;
 
 
 char* generateNewName(char* name,char id){
     char* ret = malloc(255);
     strcpy(ret,name);
-    printf("%c\n",id);
+
     bool flag = false;
     char carry;
     char temp;
@@ -342,7 +343,7 @@ char* generateNewName(char* name,char id){
     ret[i+1] = temp;
     ret[i+2] = '\0';
     ret[index] = id;
-    printf("%s\n",ret);
+
     return ret;
     //strcat(name,&carry);
 }
@@ -553,6 +554,7 @@ void* vm_main(void* args){
                                             strcpy(file_list->name,name);
                                             file_list->next = NULL;
                                             file_list->copied = false;
+                                            strcpy(file_list->mode,mode);
                                         }
                                         else{
                                             OpenFiles *temp = file_list;
@@ -563,6 +565,7 @@ void* vm_main(void* args){
                                             strcpy(temp->name,name);
                                             temp->next = NULL;
                                             temp->copied = false;
+                                            strcpy(temp->mode,mode);
                                         }
                                         OpenFiles* temp = file_list;
                                         printf("Open files: ");
@@ -657,14 +660,22 @@ void* vm_main(void* args){
                                         printf("pravimo novi fajl\n");
                                         char t = (char)(id+48);
                                         char* h = temp->name;
+                                        fclose(temp->file);
                                         temp->copied = true;
                                         char* new_name = generateNewName(h,t);
-                                        temp->file = fopen(new_name,"w+");
+                                        printf("%s\n",temp->mode);
+                                        if (temp->mode[2]=='\0')printf("OK\n");
+                                        temp->file = fopen(new_name,temp->mode);
+                                        if (!temp->file){
+                                            printf("ERROR\n");
+                                            return false;
+                                        }
                                         printf("%s\n",new_name);
                                         break;
                                     }
                                 }
                                 fwrite(&input,1,1,temp->file);
+
                             }
 
                             break;
