@@ -116,13 +116,13 @@ static void setup_64bit_code_segment(struct kvm_sregs *sregs)
 // Vise od long modu mozete prociati o stranicenju u glavi 5:
 // https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf
 // Pogledati figuru 5.1 na stranici 128.
-static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs, int PAGE_SIZE)
+static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs, size_t memSize, size_t pageSize)
 {
     // Postavljanje 4 niva ugnjezdavanja.
     // Svaka tabela stranica ima 512 ulaza, a svaki ulaz je veličine 8B.
     // Odatle sledi da je veličina tabela stranica 4KB. Ove tabele moraju da budu poravnate na 4KB.
     uint64_t page = 0;
-    uint64_t pml4_addr = 0x1000; // Adrese su proizvoljne.
+    uint64_t pml4_addr = 0x1000;
     uint64_t *pml4 = (void *)(vm->mem + pml4_addr);
 
     uint64_t pdpt_addr = 0x2000;
@@ -131,49 +131,39 @@ static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs, int PAGE_SIZ
     uint64_t pd_addr = 0x3000;
     uint64_t *pd = (void *)(vm->mem + pd_addr);
 
-    uint64_t pt_addr = 0x4000;
-    uint64_t *pt = (void *)(vm->mem + pt_addr);
-
-
     pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
     pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
 
+    size_t pages = memSize / pageSize;
 
-    switch(PAGE_SIZE){
-        case 0x200000:
-            pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
-            // PC vrednost se mapira na ovu stranicu.
+    switch (pageSize) {
+        case 4 * 1024:
+            uint64_t pt_addr = 0x6000;
+            uint64_t *pt = (void *)(vm->mem + pt_addr);
+
+
+            for (size_t i = 0; i < pages; i++) {
+                pd[i] = PDE64_PRESENT | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
+                page += pageSize;
+            }
+
             pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-            // SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
-            pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+            pt[511] = 0x8000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+
+            printf("%d\n",pages);
+            for (size_t i = 0; i < pages; i++) {
+                pt[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+                page += pageSize;
+            }
+            printf("%lx\n",page);
             break;
-        case 0x1000:
-            pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
-            // PC vrednost se mapira na ovu stranicu.
-            pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-            // SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
-            pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+        case 2 * 1024 * 1024:
+            for (size_t i = 0; i < pages; i++) {
+                pd[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
+                page += pageSize;
+            }
             break;
     }
-
-    // 2MB page size
-    // pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
-
-    // 4KB page size
-    // -----------------------------------------------------
-    //pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
-    // PC vrednost se mapira na ovu stranicu.
-    //pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-    // SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
-    //pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-
-    // FOR petlja služi tome da mapiramo celu memoriju sa stranicama 4KB.
-    // Zašti je uslov i < 512? Odgovor: jer je memorija veličine 2MB.
-    // for(int i = 0; i < 512; i++) {
-    // 	pt[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-    // 	page += 0x1000;
-    // }
-    // -----------------------------------------------------
 
     // Registar koji ukazuje na PML4 tabelu stranica. Odavde kreće mapiranje VA u PA.
     sregs->cr3  = pml4_addr;
@@ -384,7 +374,7 @@ void* vm_main(void* args){
         return NULL;
     }
 
-    setup_long_mode(&vm, &sregs,PAGE_SIZE);
+    setup_long_mode(&vm, &sregs,MEM_SIZE,PAGE_SIZE);
 
     if (ioctl(vm.vcpu_fd, KVM_SET_SREGS, &sregs) < 0) {
         perror("KVM_SET_SREGS");
@@ -395,7 +385,9 @@ void* vm_main(void* args){
     regs.rflags = 2;
     regs.rip = 0;
     // SP raste nadole
-    regs.rsp = 2 << 20;
+    regs.rsp = MEM_SIZE;
+
+
 
     if (ioctl(vm.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
         perror("KVM_SET_REGS");

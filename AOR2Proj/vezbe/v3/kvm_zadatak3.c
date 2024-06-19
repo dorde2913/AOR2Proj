@@ -21,7 +21,7 @@
 #include <stdint.h>
 #include <linux/kvm.h>
 
-#define MEM_SIZE 0x200000 // Veličina memorije će biti 2MB
+#define MEM_SIZE 0x400000 // Veličina memorije će biti 2MB
 #define PDE64_PRESENT 1
 #define PDE64_RW (1U << 1)
 #define PDE64_USER (1U << 2)
@@ -38,226 +38,232 @@
 #define EFER_LMA (1U << 10)
 
 struct vm {
-	int kvm_fd;
-	int vm_fd;
-	int vcpu_fd;
-	char *mem;
-	struct kvm_run *kvm_run;
+    int kvm_fd;
+    int vm_fd;
+    int vcpu_fd;
+    char *mem;
+    struct kvm_run *kvm_run;
 };
 
 int init_vm(struct vm *vm, size_t mem_size)
 {
-	struct kvm_userspace_memory_region region;
-	int kvm_run_mmap_size;
+    struct kvm_userspace_memory_region region;
+    int kvm_run_mmap_size;
 
-	vm->kvm_fd = open("/dev/kvm", O_RDWR);
-	if (vm->kvm_fd < 0) {
-		perror("open /dev/kvm");
-		return -1;
-	}
+    vm->kvm_fd = open("/dev/kvm", O_RDWR);
+    if (vm->kvm_fd < 0) {
+        perror("open /dev/kvm");
+        return -1;
+    }
 
-	vm->vm_fd = ioctl(vm->kvm_fd, KVM_CREATE_VM, 0);
-	if (vm->vm_fd < 0) {
-		perror("KVM_CREATE_VM");
-		return -1;
-	}
+    vm->vm_fd = ioctl(vm->kvm_fd, KVM_CREATE_VM, 0);
+    if (vm->vm_fd < 0) {
+        perror("KVM_CREATE_VM");
+        return -1;
+    }
 
-	vm->mem = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
-		   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-	if (vm->mem == MAP_FAILED) {
-		perror("mmap mem");
-		return -1;
-	}
+    vm->mem = mmap(NULL, mem_size, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (vm->mem == MAP_FAILED) {
+        perror("mmap mem");
+        return -1;
+    }
 
-	region.slot = 0;
-	region.flags = 0;
-	region.guest_phys_addr = 0;
-	region.memory_size = mem_size;
-	region.userspace_addr = (unsigned long)vm->mem;
+    region.slot = 0;
+    region.flags = 0;
+    region.guest_phys_addr = 0;
+    region.memory_size = mem_size;
+    region.userspace_addr = (unsigned long)vm->mem;
     if (ioctl(vm->vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
-		perror("KVM_SET_USER_MEMORY_REGION");
+        perror("KVM_SET_USER_MEMORY_REGION");
         return -1;
-	}
+    }
 
-	vm->vcpu_fd = ioctl(vm->vm_fd, KVM_CREATE_VCPU, 0);
+    vm->vcpu_fd = ioctl(vm->vm_fd, KVM_CREATE_VCPU, 0);
     if (vm->vcpu_fd < 0) {
-		perror("KVM_CREATE_VCPU");
+        perror("KVM_CREATE_VCPU");
         return -1;
-	}
+    }
 
-	kvm_run_mmap_size = ioctl(vm->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+    kvm_run_mmap_size = ioctl(vm->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
     if (kvm_run_mmap_size <= 0) {
-		perror("KVM_GET_VCPU_MMAP_SIZE");
-		return -1;
-	}
+        perror("KVM_GET_VCPU_MMAP_SIZE");
+        return -1;
+    }
 
-	vm->kvm_run = mmap(NULL, kvm_run_mmap_size, PROT_READ | PROT_WRITE,
-			     MAP_SHARED, vm->vcpu_fd, 0);
-	if (vm->kvm_run == MAP_FAILED) {
-		perror("mmap kvm_run");
-		return -1;
-	}
+    vm->kvm_run = mmap(NULL, kvm_run_mmap_size, PROT_READ | PROT_WRITE,
+                       MAP_SHARED, vm->vcpu_fd, 0);
+    if (vm->kvm_run == MAP_FAILED) {
+        perror("mmap kvm_run");
+        return -1;
+    }
 
-	return 0;
+    return 0;
 }
 
 static void setup_64bit_code_segment(struct kvm_sregs *sregs)
 {
-	struct kvm_segment seg = {
-		.base = 0,
-		.limit = 0xffffffff,
-		.present = 1, // Prisutan ili učitan u memoriji
-		.type = 11, // Code: execute, read, accessed
-		.dpl = 0, // Descriptor Privilage Level: 0 (0, 1, 2, 3)
-		.db = 0, // Default size - ima vrednost 0 u long modu
-		.s = 1, // Code/data tip segmenta
-		.l = 1, // Long mode - 1
-		.g = 1, // 4KB granularnost
-	};
+    struct kvm_segment seg = {
+            .base = 0,
+            .limit = 0xffffffff,
+            .present = 1, // Prisutan ili učitan u memoriji
+            .type = 11, // Code: execute, read, accessed
+            .dpl = 0, // Descriptor Privilage Level: 0 (0, 1, 2, 3)
+            .db = 0, // Default size - ima vrednost 0 u long modu
+            .s = 1, // Code/data tip segmenta
+            .l = 1, // Long mode - 1
+            .g = 1, // 4KB granularnost
+    };
 
-	sregs->cs = seg;
+    sregs->cs = seg;
 
-	seg.type = 3; // Data: read, write, accessed
-	sregs->ds = sregs->es = sregs->fs = sregs->gs = sregs->ss = seg;
+    seg.type = 3; // Data: read, write, accessed
+    sregs->ds = sregs->es = sregs->fs = sregs->gs = sregs->ss = seg;
 }
 
 // Omogucavanje long moda.
 // Vise od long modu mozete prociati o stranicenju u glavi 5:
 // https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf
 // Pogledati figuru 5.1 na stranici 128.
-static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs)
+static void setup_long_mode(struct vm *vm, struct kvm_sregs *sregs, size_t memSize, size_t pageSize)
 {
-	// Postavljanje 4 niva ugnjezdavanja.
-	// Svaka tabela stranica ima 512 ulaza, a svaki ulaz je veličine 8B.
-    // Odatle sledi da je veličina tabela stranica 4KB. Ove tabele moraju da budu poravnate na 4KB. 
-	uint64_t page = 0;
-	uint64_t pml4_addr = 0x1000; // Adrese su proizvoljne.
-	uint64_t *pml4 = (void *)(vm->mem + pml4_addr);
+    // Postavljanje 4 niva ugnjezdavanja.
+    // Svaka tabela stranica ima 512 ulaza, a svaki ulaz je veličine 8B.
+    // Odatle sledi da je veličina tabela stranica 4KB. Ove tabele moraju da budu poravnate na 4KB.
+    uint64_t page = 0;
+    uint64_t pml4_addr = 0x1000;
+    uint64_t *pml4 = (void *)(vm->mem + pml4_addr);
 
-	uint64_t pdpt_addr = 0x2000;
-	uint64_t *pdpt = (void *)(vm->mem + pdpt_addr);
+    uint64_t pdpt_addr = 0x2000;
+    uint64_t *pdpt = (void *)(vm->mem + pdpt_addr);
 
-	uint64_t pd_addr = 0x3000;
-	uint64_t *pd = (void *)(vm->mem + pd_addr);
+    uint64_t pd_addr = 0x3000;
+    uint64_t *pd = (void *)(vm->mem + pd_addr);
 
-	uint64_t pt_addr = 0x4000;
-	uint64_t *pt = (void *)(vm->mem + pt_addr);
+    pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
+    pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
 
-	pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
-	pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
-	// 2MB page size
-	// pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
+    size_t pages = memSize / pageSize;
 
-	// 4KB page size
-	// -----------------------------------------------------
-	pd[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
-	// PC vrednost se mapira na ovu stranicu.
-	pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-	// SP vrednost se mapira na ovu stranicu. Vrednost 0x6000 je proizvoljno tu postavljena.
-	pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER; 
+    switch (pageSize) {
+        case 4 * 1024:
+            uint64_t pt_addr = 0x4000;
+            uint64_t *pt = (void *)(vm->mem + pt_addr);
 
-	// FOR petlja služi tome da mapiramo celu memoriju sa stranicama 4KB.
-	// Zašti je uslov i < 512? Odgovor: jer je memorija veličine 2MB.
-	// for(int i = 0; i < 512; i++) {
-	// 	pt[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
-	// 	page += 0x1000;
-	// }
-	// -----------------------------------------------------
+            for (size_t i = 0; i < pages; i++) {
+                pd[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
+                page += pageSize;
+            }
+            pt[0] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+            pt[511] = 0x6000 | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+
+            for (size_t i = 0; i < pages; i++) {
+                pt[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER;
+                page += pageSize;
+            }
+            break;
+        case 2 * 1024 * 1024:
+            for (size_t i = 0; i < pages; i++) {
+                pd[i] = page | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
+                page += pageSize;
+            }
+            break;
+    }
 
     // Registar koji ukazuje na PML4 tabelu stranica. Odavde kreće mapiranje VA u PA.
-	sregs->cr3  = pml4_addr; 
-	sregs->cr4  = CR4_PAE; // "Physical Address Extension" mora biti 1 za long mode.
-	sregs->cr0  = CR0_PE | CR0_PG; // Postavljanje "Protected Mode" i "Paging" 
-	sregs->efer = EFER_LME | EFER_LMA; // Postavljanje  "Long Mode Active" i "Long Mode Enable"
+    sregs->cr3  = pml4_addr;
+    sregs->cr4  = CR4_PAE; // "Physical Address Extension" mora biti 1 za long mode.
+    sregs->cr0  = CR0_PE | CR0_PG; // Postavljanje "Protected Mode" i "Paging"
+    sregs->efer = EFER_LME | EFER_LMA; // Postavljanje  "Long Mode Active" i "Long Mode Enable"
 
-	// Inicijalizacija segmenata procesora.
-	setup_64bit_code_segment(sregs);
+    // Inicijalizacija segmenata procesora.
+    setup_64bit_code_segment(sregs);
 }
 
 int main(int argc, char *argv[])
 {
-	struct vm vm;
-	struct kvm_sregs sregs;
-	struct kvm_regs regs;
-	int stop = 0;
-	int ret = 0;
-	FILE* img;
+    struct vm vm;
+    struct kvm_sregs sregs;
+    struct kvm_regs regs;
+    int stop = 0;
+    int ret = 0;
+    FILE* img;
 
-	if (argc != 2) {
-    	printf("The program requests an image to run: %s <guest-image>\n", argv[0]);
-    	return 1;
-  	}
+    if (argc != 2) {
+        printf("The program requests an image to run: %s <guest-image>\n", argv[0]);
+        return 1;
+    }
 
-	if (init_vm(&vm, MEM_SIZE)) {
-		printf("Failed to init the VM\n");
-		return -1;
-	}
+    if (init_vm(&vm, MEM_SIZE)) {
+        printf("Failed to init the VM\n");
+        return -1;
+    }
 
-	if (ioctl(vm.vcpu_fd, KVM_GET_SREGS, &sregs) < 0) {
-		perror("KVM_GET_SREGS");
-		return -1;
-	}
+    if (ioctl(vm.vcpu_fd, KVM_GET_SREGS, &sregs) < 0) {
+        perror("KVM_GET_SREGS");
+        return -1;
+    }
 
-	setup_long_mode(&vm, &sregs);
+    setup_long_mode(&vm, &sregs,MEM_SIZE,4*1024);
 
     if (ioctl(vm.vcpu_fd, KVM_SET_SREGS, &sregs) < 0) {
-		perror("KVM_SET_SREGS");
-		return -1;
-	}
+        perror("KVM_SET_SREGS");
+        return -1;
+    }
 
-	memset(&regs, 0, sizeof(regs));
-	regs.rflags = 2;
-	regs.rip = 0;
-	// SP raste nadole
-	regs.rsp = 2 << 20;
+    memset(&regs, 0, sizeof(regs));
+    regs.rflags = 2;
+    regs.rip = 0;
+    // SP raste nadole
+    regs.rsp = MEM_SIZE;
 
-	if (ioctl(vm.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
-		perror("KVM_SET_REGS");
-		return -1;
-	}
+    if (ioctl(vm.vcpu_fd, KVM_SET_REGS, &regs) < 0) {
+        perror("KVM_SET_REGS");
+        return -1;
+    }
 
-	img = fopen(argv[1], "r");
-	if (img == NULL) {
-		printf("Can not open binary file\n");
-		return -1;
-	}
+    img = fopen(argv[1], "r");
+    if (img == NULL) {
+        printf("Can not open binary file\n");
+        return -1;
+    }
 
-	char *p = vm.mem;
-  	while(feof(img) == 0) {
-    	int r = fread(p, 1, 1024, img);
-    	p += r;
-  	}
-  	fclose(img);
+    char *p = vm.mem;
+    while(feof(img) == 0) {
+        int r = fread(p, 1, 1024, img);
+        p += r;
+    }
+    fclose(img);
 
-	while(stop == 0) {
-		ret = ioctl(vm.vcpu_fd, KVM_RUN, 0);
-		if (ret == -1) {
-		printf("KVM_RUN failed\n");
-		return 1;
-		}
+    while(stop == 0) {
+        ret = ioctl(vm.vcpu_fd, KVM_RUN, 0);
+        if (ret == -1) {
+            printf("KVM_RUN failed\n");
+            return 1;
+        }
 
-		switch (vm.kvm_run->exit_reason) {
-			case KVM_EXIT_IO:
-				if (vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.port == 0xE9) {
-					char *p = (char *)vm.kvm_run;
-					printf("%c", *(p + vm.kvm_run->io.data_offset));
-				}
-				continue;
-			case KVM_EXIT_HLT:
-				printf("KVM_EXIT_HLT\n");
-				stop = 1;
-				break;
-			case KVM_EXIT_INTERNAL_ERROR:
-				printf("Internal error: suberror = 0x%x\n", vm.kvm_run->internal.suberror);
-				stop = 1;
-				break;
-			case KVM_EXIT_SHUTDOWN:
-				printf("Shutdown\n");
-				stop = 1;
-				break;
-			default:
-				printf("Exit reason: %d\n", vm.kvm_run->exit_reason);
-				break;
-    	}
-  	}
+        switch (vm.kvm_run->exit_reason) {
+            case KVM_EXIT_IO:
+                if (vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.port == 0xE9) {
+                    char *p = (char *)vm.kvm_run;
+                    printf("%c", *(p + vm.kvm_run->io.data_offset));
+                }
+                continue;
+            case KVM_EXIT_HLT:
+                printf("KVM_EXIT_HLT\n");
+                stop = 1;
+                break;
+            case KVM_EXIT_INTERNAL_ERROR:
+                printf("Internal error: suberror = 0x%x\n", vm.kvm_run->internal.suberror);
+                stop = 1;
+                break;
+            case KVM_EXIT_SHUTDOWN:
+                printf("Shutdown\n");
+                stop = 1;
+                break;
+            default:
+                printf("Exit reason: %d\n", vm.kvm_run->exit_reason);
+                break;
+        }
+    }
 }
