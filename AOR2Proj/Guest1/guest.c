@@ -22,10 +22,13 @@ _start(void) {
     uint16_t port = 0xE9;
     uint8_t value = 'E';
     uint8_t input;
-    inb(0xE9,&input);
-    outb(0xE9,input);
-    for (p = "Ovo je kod Guest1!\n"; *p; ++p)
-        outb(0xE9, *p);
+    //inb(0xE9,&input);
+    //outb(0xE9,input);
+    for (int i=0;i<20;i++){
+        for (p = "Ovo je kod Guest1!\n"; *p; ++p)
+            outb(0xE9, *p);
+    }
+
 
 
 

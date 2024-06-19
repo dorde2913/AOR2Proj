@@ -446,32 +446,36 @@ void* vm_main(void* args){
         switch (vm.kvm_run->exit_reason) {
             case KVM_EXIT_IO:
                 if (vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.port == 0xE9) {
-                    sem_wait(&mutex);
+
                     char *p = (char *)vm.kvm_run;
                     printf("%c", *(p + vm.kvm_run->io.data_offset));
-                    sem_post(&mutex);
+                    if (*p == '\0') {
+                        usleep(100000);
+                    }
                 }
                 else if (vm.kvm_run->io.direction == KVM_EXIT_IO_IN && vm.kvm_run->io.port == 0xE9) {
-                    sem_wait(&mutex);
-                    printf("Process %d Enter a number between 0 and 8:\n",id);
+
+                    printf("input: \n");
                     scanf("%d", &data);
                     char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
                     (*data_in) = data;
-                    sem_post(&mutex);
+
                 }
                 else if (vm.kvm_run->io.direction == KVM_EXIT_IO_IN && vm.kvm_run->io.port == 0x278) {
                     /*
                      * citanje iz fajla
                      */
                     if (reading){
+
+                        //printf("reading character from file...\n");
+                        char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
+                        (*data_in) = fgetc(current_file);
                         if (feof(current_file)){
                             reading = false;
                             char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
                             (*data_in) = '\0';
                         }
-                        //printf("reading character from file...\n");
-                        char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
-                        (*data_in) = fgetc(current_file);
+
 
                         if (ferror(current_file))printf("error...\n");
                         //printf("%c\n",*data_in);
@@ -555,6 +559,29 @@ void* vm_main(void* args){
                                             file_list->next = NULL;
                                             file_list->copied = false;
                                             strcpy(file_list->mode,mode);
+                                            if (strcmp(mode,"w") == 0 || strcmp(mode,"w+") == 0 || strcmp(mode,"r+") == 0 ||
+                                                strcmp(mode,"a") == 0 ||strcmp(mode,"a+") == 0){
+                                                for (int i=0;i<num_shared;i++){
+                                                    if (strcmp(file_list->name,shared_files[i])==0 && !file_list->copied){
+                                                        //moramo da napravimo nov fajl
+                                                        printf("pravimo novi fajl\n");
+                                                        char t = (char)(id+48);
+                                                        char* h = file_list->name;
+                                                        fclose(file_list->file);
+                                                        file_list->copied = true;
+                                                        char* new_name = generateNewName(h,t);
+
+                                                        file_list->file = fopen(new_name,file_list->mode);
+                                                        if (!file_list->file){
+                                                            file_list->file = fopen(new_name,"w");
+                                                            fclose(file_list->file);
+                                                            file_list->file = fopen(new_name,file_list->mode);
+                                                        }
+                                                        printf("%s\n",new_name);
+                                                        break;
+                                                    }
+                                                }
+                                            }
                                         }
                                         else{
                                             OpenFiles *temp = file_list;
@@ -566,6 +593,29 @@ void* vm_main(void* args){
                                             temp->next = NULL;
                                             temp->copied = false;
                                             strcpy(temp->mode,mode);
+                                            if (strcmp(mode,"w") == 0 || strcmp(mode,"w+") == 0 || strcmp(mode,"r+") == 0 ||
+                                                strcmp(mode,"a") == 0 ||strcmp(mode,"a+") == 0){
+                                                for (int i=0;i<num_shared;i++){
+                                                    if (strcmp(temp->name,shared_files[i])==0 && !temp->copied){
+                                                        //moramo da napravimo nov fajl
+                                                        printf("pravimo novi fajl\n");
+                                                        char t = (char)(id+48);
+                                                        char* h = temp->name;
+                                                        fclose(temp->file);
+                                                        temp->copied = true;
+                                                        char* new_name = generateNewName(h,t);
+
+                                                        temp->file = fopen(new_name,temp->mode);
+                                                        if (!temp->file){
+                                                            temp->file = fopen(new_name,"w");
+                                                            fclose(temp->file);
+                                                            temp->file = fopen(new_name,temp->mode);
+                                                        }
+                                                        printf("%s\n",new_name);
+                                                        break;
+                                                    }
+                                                }
+                                            }
                                         }
                                         OpenFiles* temp = file_list;
                                         printf("Open files: ");
@@ -654,26 +704,7 @@ void* vm_main(void* args){
                                     return false;
                                 }
                                 //ako je fajl medju deljenim, mora da se napravi nov
-                                for (int i=0;i<num_shared;i++){
-                                    if (strcmp(temp->name,shared_files[i])==0 && !temp->copied){
-                                        //moramo da napravimo nov fajl
-                                        printf("pravimo novi fajl\n");
-                                        char t = (char)(id+48);
-                                        char* h = temp->name;
-                                        fclose(temp->file);
-                                        temp->copied = true;
-                                        char* new_name = generateNewName(h,t);
-                                        printf("%s\n",temp->mode);
-                                        if (temp->mode[2]=='\0')printf("OK\n");
-                                        temp->file = fopen(new_name,temp->mode);
-                                        if (!temp->file){
-                                            printf("ERROR\n");
-                                            return false;
-                                        }
-                                        printf("%s\n",new_name);
-                                        break;
-                                    }
-                                }
+
                                 fwrite(&input,1,1,temp->file);
 
                             }
